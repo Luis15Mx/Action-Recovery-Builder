@@ -1,99 +1,93 @@
-name: Recovery Build
+name: OrangeFox 12.1 Recovery - Moto E7 Plus (guam)
 
 on:
   workflow_dispatch:
-    inputs:
-      MANIFEST_URL:
-        description: 'Manifest URL'
-        required: true
-        default: 'https://gitlab.com/OrangeFox/Manifest.git'
-      MANIFEST_BRANCH:
-        description: 'Manifest Branch'
-        required: true
-        default: 'fox_12.1'
-      DEVICE_TREE_URL:
-        description: 'Device Tree URL'
-        required: true
-        default: 'https://github.com/Moto-Guam/twrp_device_motorola_guam'
-      DEVICE_TREE_BRANCH:
-        description: 'Device Tree Branch'
-        required: true
-        default: 'android-12.1'
-      DEVICE_PATH:
-        description: 'Device Path'
-        required: true
-        default: 'device/motorola/guam'
-      DEVICE_NAME:
-        description: 'Device Name'
-        required: true
-        default: 'guam'
-      MAKEFILE_NAME:
-        description: 'Makefile Name'
-        required: true
-        default: 'twrp_guam'
-      BUILD_TARGET:
-        description: 'Build Target'
-        required: true
-        default: 'recovery'
 
 jobs:
   build:
+    # Docker/Runner de GitHub completamente actualizado y soportado oficialmente
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout
+    - name: Checkout del Repositorio
       uses: actions/checkout@v4
 
-    - name: Clean Up Space
-      uses: jlumbroso/free-disk-space@main
-      with:
-        tool-cache: true
-        android: true
-        dotnet: true
-        haskell: true
-        large-packages: true
-        docker-images: false
-        swap-storage: true
+    - name: Liberar Espacio de Almacenamiento Masivo
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /share/swift
+        sudo apt-get remove --purge --auto-remove google-chrome-stable microsoft-edge-stable firefox -y
+        sudo apt-get clean
+        df -h
 
-    - name: Set up building environment
+    - name: Instalar Dependencias Modernas (Sin Paquetes Obsoletos ni Bucles)
       run: |
         sudo apt-get update
-        sudo apt-get install -y bc build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32ncurses-dev lib32z1-dev liblz4-tool libncurses5 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
+        sudo apt-get install -y \
+          build-essential git git-lfs bc bison flex g++-multilib gcc-multilib \
+          libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools \
+          xsltproc zip zlib1g-dev lib32z1-dev libtinfo5 libncurses5 libncurses5-dev \
+          lib32ncurses-dev python3 python3-pip python-is-python3 libssl-dev \
+          curl wget liblz4-tool openjdk-11-jdk libgmp-dev libmpfr-dev libmpc-dev \
+          gperf libcap-dev python3-setuptools
 
-    - name: Install Repo
+    - name: Configurar e Instalar Herramienta Repo de Google
       run: |
         mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        curl https://googleapis.com > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
 
-    - name: Initialize Repo & Sync
+    - name: Configurar Identidad de Git
       run: |
-        mkdir workspace
-        cd workspace
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
-        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
-        repo sync -c --no-clone-bundle --no-tags --optimized-fetch --prune -j$(nproc --all)
 
-    - name: Clone Device Tree
+    - name: Descargar Sincronizador Oficial de OrangeFox
       run: |
-        cd workspace
-        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
+        mkdir -p ~/OrangeFox_sync
+        cd ~/OrangeFox_sync
+        git clone https://gitlab.com/OrangeFox/sync.git
 
-    - name: Building Recovery
+    - name: Sincronizar Manifiesto de OrangeFox 12.1 (Ahorro de espacio)
       run: |
-        cd workspace
-        source build/envsetup.sh
+        cd ~/OrangeFox_sync/sync
+        # Ejecuta la sincronización apuntando a la arquitectura de ramas moderna 12.1
+        ./orangefox_sync.sh --branch 12.1 --path ${{ github.workspace }}/fox_12.1
+
+    - name: Clonar Árbol de Dispositivo (guam)
+      run: |
+        cd ${{ github.workspace }}/fox_12.1
+        # Se inyecta el Device Tree específico adaptado a las variables criptográficas de OrangeFox
+        git clone https://github.com -b lineage-21 device/motorola/guam
+
+    - name: Configurar Variables Criptográficas y Compilar OrangeFox
+      run: |
+        cd ${{ github.workspace }}/fox_12.1
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng || lunch ${{ github.event.inputs.MAKEFILE_NAME }}-userdebug
-        mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+        export LC_ALL=C
+        
+        # --- PARÁMETROS CRÍTICOS PARA DESENCRIPTACIÓN COMPLETA DE ALMACENAMIENTO ---
+        export TW_INCLUDE_CRYPTO=true
+        export TW_INCLUDE_CRYPTO_FBE=true
+        export TW_INCLUDE_FBE_METADATA_DECRYPT=true
+        export PLATFORM_VERSION="14"
+        export PLATFORM_SECURITY_PATCH="2026-03-01"
+        export TARGET_HW_DISK_ENCRYPTION=true
+        # ---------------------------------------------------------------------------
 
-    - name: Upload Recovery
+        source build/envsetup.sh
+        # Al usar OrangeFox el prefijo cambia dinámicamente a omni_ o fox_
+        lunch omni_guam-eng || lunch twrp_guam-eng
+        
+        # Forzar la compilación del binario limpio
+        mka recoveryimage -j$(nproc --all)
+
+    - name: Subir OrangeFox Compilado (Instalable por Fastboot y Recovery)
       uses: actions/upload-artifact@v4
       with:
-        name: OrangeFox_Recovery_${{ github.event.inputs.DEVICE_NAME }}
+        name: OrangeFox-Android14-Desencriptado-guam
         path: |
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.zip
+          ${{ github.workspace }}/fox_12.1/out/target/product/guam/OrangeFox*.img
+          ${{ github.workspace }}/fox_12.1/out/target/product/guam/OrangeFox*.zip
+          ${{ github.workspace }}/fox_12.1/out/target/product/guam/recovery.img
           
