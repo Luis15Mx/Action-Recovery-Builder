@@ -21,7 +21,10 @@ jobs:
         remove-haskell: 'true'
         remove-codeql: 'true'
         remove-docker-images: 'true'
-        build-mount-path: '/home/runner/work'
+        # NO se especifica build-mount-path: el default monta sobre
+        # $GITHUB_WORKSPACE (la carpeta del repo), no sobre /home/runner/work
+        # completo. Montar sobre /home/runner/work borra el caché interno
+        # que usa actions/checkout para encontrarse a sí mismo y falla.
 
     - name: Checkout del Repositorio
       uses: actions/checkout@v4
