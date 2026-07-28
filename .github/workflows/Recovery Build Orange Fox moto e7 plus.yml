@@ -35,17 +35,20 @@ jobs:
     - name: Instalar Dependencias del Sistema
       run: |
         sudo apt-get update
-        # libtinfo5/libncurses5 no existen en 22.04: se agrega el repo de jammy-security / se instala vía focal
         sudo apt-get install -y \
           build-essential git git-lfs bc bison flex g++-multilib gcc-multilib \
           libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools \
           xsltproc zip zlib1g-dev lib32z1-dev python3 python3-pip python-is-python3 \
           libssl-dev curl wget liblz4-tool openjdk-11-jdk libgmp-dev libmpfr-dev \
           libmpc-dev gperf libcap-dev python3-setuptools cpio p7zip-full imagemagick
-        # libncurses5/libtinfo5 (necesarios para el toolchain viejo de AOSP)
-        wget -q http://mirrors.kernel.org/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
-        wget -q http://mirrors.kernel.org/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2ubuntu0.1_amd64.deb
-        sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb libncurses5_6.3-2ubuntu0.1_amd64.deb || sudo apt-get install -f -y
+
+    - name: Instalar libtinfo5/libncurses5 (removidos de 22.04, se toman de Ubuntu Focal)
+      run: |
+        echo "deb http://archive.ubuntu.com/ubuntu focal main universe" | sudo tee /etc/apt/sources.list.d/focal.list
+        sudo apt-get update
+        sudo apt-get install -y libncurses5 libtinfo5
+        sudo rm /etc/apt/sources.list.d/focal.list
+        sudo apt-get update
 
     - name: Instalar Herramienta Repo (binario oficial de Google)
       run: |
@@ -171,4 +174,3 @@ jobs:
           workspace/out/target/product/guam/recovery.img
           addons/Magisk-v27.0.apk
         if-no-files-found: warn
-        
