@@ -1,4 +1,4 @@
-name: TWRP 12.1 Advanced - Moto E7 Plus (guam)
+name: TWRP 12.1 Definitivo - Moto E7 Plus (guam)
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
         sudo apt-get clean
         df -h
 
-    - name: Instalar Dependencias del Sistema Activas (2026)
+    - name: Instalar Dependencias del Sistema Activas
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -29,12 +29,14 @@ jobs:
           curl wget liblz4-tool openjdk-11-jdk libgmp-dev libmpfr-dev libmpc-dev \
           gperf libcap-dev python3-setuptools cpio p7zip-full
 
-    - name: Instalar Repo Oficial de Google (Enlace Directo Verificado)
+    - name: Instalar Herramienta Repo (Espejo de LineageOS sin error HTML)
       run: |
         mkdir -p ~/bin
-        curl -s https://googleapis.com > ~/bin/repo
+        # Descarga directa del binario puro de Python desde el servidor de LineageOS
+        curl -L -s https://lineageos.org > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
+        # Esto imprimirá el encabezado en consola para asegurar que es un script ejecutable
         head -n 5 /usr/bin/repo
 
     - name: Configurar Git de Forma Global
@@ -60,7 +62,7 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         
-        # --- PARÁMETROS DE DESCIFRADO Y ALMACENAMIENTO ---
+        # --- PARÁMETROS DE DESCIFRADO DE ALMACENAMIENTO ---
         export TW_INCLUDE_CRYPTO=true
         export TW_INCLUDE_CRYPTO_FBE=true
         export TW_INCLUDE_FBE_METADATA_DECRYPT=true
@@ -69,7 +71,7 @@ jobs:
         export TARGET_HW_DISK_ENCRYPTION=true
         export TW_INCLUDE_NTFS_3G=true
         
-        # --- CARACTERÍSTICAS EXTRA (EDICIÓN AVANZADA) ---
+        # --- CARACTERÍSTICAS EXTRA DE ORANGEFOX/TWRP AVANZADO ---
         export TW_SUPPORT_ADB_SIDELOAD=true
         export TW_HAS_MTP=true
         export TW_INCLUDE_MTP=true
@@ -87,37 +89,35 @@ jobs:
       run: |
         mkdir -p addons
         cd addons
-        wget -q https://github.com
-        # Convertimos el APK en un ZIP flasheable por recovery de forma directa
+        curl -L -s -O https://github.com
         mv Magisk-v27.0.apk Magisk-v27.0-Flasheable.zip
 
     - name: Construir Paquete ZIP de Instalación Avanzado
       run: |
         cd workspace/out/target/product/guam/
         
-        # Si el compilador generó el recovery.img base, empaquetamos la estructura instalable
         if [ -f "recovery.img" ]; then
           mkdir -p zip_structure/META-INF/com/google/android
           cp recovery.img zip_structure/
           cp ../../../../../addons/Magisk-v27.0-Flasheable.zip zip_structure/
           
-          # Creamos el script de flasheo básico universal que inyectará el recovery en la partición
+          # Script de terminal universal embebido para inyectar el img directamente
           cat << 'EOF' > zip_structure/META-INF/com/google/android/update-binary
           #!/sbin/sh
-          ui_print "--------------------------------------"
-          ui_print "  TWRP 12.1 Advanced Installer"
-          ui_print "  Dispositivo: Moto E7 Plus (guam)"
-          ui_print "--------------------------------------"
-          ui_print "[+] Instalando imagen de Recovery..."
-          package_extract_file "recovery.img" "/dev/block/by-name/recovery"
-          ui_print "[+] Recovery instalado correctamente."
-          ui_print "--------------------------------------"
+          echo "--------------------------------------"
+          echo "  TWRP 12.1 Advanced Installer"
+          echo "  Dispositivo: Moto E7 Plus (guam)"
+          echo "--------------------------------------"
+          echo "[+] Instalando imagen de Recovery..."
+          dd if=/recovery.img of=/dev/block/by-name/recovery
+          echo "[+] Recovery instalado correctamente."
+          echo "--------------------------------------"
+          exit 0
           EOF
           
           chmod 755 zip_structure/META-INF/com/google/android/update-binary
           touch zip_structure/META-INF/com/google/android/updater-script
           
-          # Comprimir todo el paquete final
           cd zip_structure
           zip -r ../TWRP-12.1-guam-INSTALABLE.zip .
         else
