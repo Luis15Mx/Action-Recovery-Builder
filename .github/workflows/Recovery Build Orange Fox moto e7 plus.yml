@@ -1,0 +1,98 @@
+name: Recovery Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_URL:
+        description: 'Manifest URL'
+        required: true
+        default: 'https://gitlab.com/OrangeFox/Manifest.git'
+      MANIFEST_BRANCH:
+        description: 'Manifest Branch'
+        required: true
+        default: 'fox_12.1'
+      DEVICE_TREE_URL:
+        description: 'Device Tree URL'
+        required: true
+        default: 'https://github.com/Moto-Guam/twrp_device_motorola_guam'
+      DEVICE_TREE_BRANCH:
+        description: 'Device Tree Branch'
+        required: true
+        default: 'android-12.1'
+      DEVICE_PATH:
+        description: 'Device Path'
+        required: true
+        default: 'device/motorola/guam'
+      DEVICE_NAME:
+        description: 'Device Name'
+        required: true
+        default: 'guam'
+      MAKEFILE_NAME:
+        description: 'Makefile Name'
+        required: true
+        default: 'twrp_guam'
+      BUILD_TARGET:
+        description: 'Build Target'
+        required: true
+        default: 'recovery'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Clean Up Space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: true
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: false
+        swap-storage: true
+
+    - name: Set up building environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32ncurses-dev lib32z1-dev liblz4-tool libncurses5 libxml2-utils lzop pngcrush rs-sync schedtool squashfs-tools xsltproc zip zlib1g-dev
+
+    - name: Install Repo
+      run: |
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
+
+    - name: Initialize Repo & Sync
+      run: |
+        mkdir workspace
+        cd workspace
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+        repo sync -c --no-clone-bundle --no-tags --optimized-fetch --prune -j$(nproc --all)
+
+    - name: Clone Device Tree
+      run: |
+        cd workspace
+        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
+
+    - name: Building Recovery
+      run: |
+        cd workspace
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng || lunch ${{ github.event.inputs.MAKEFILE_NAME }}-userdebug
+        mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+
+    - name: Upload Recovery
+      uses: actions/upload-artifact@v4
+      with:
+        name: OrangeFox_Recovery_${{ github.event.inputs.DEVICE_NAME }}
+        path: |
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.zip
