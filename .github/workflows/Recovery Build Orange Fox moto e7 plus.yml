@@ -1,4 +1,4 @@
-name: TWRP 12.1 Definitivo - Moto E7 Plus (guam)
+name: TWRP 12.1 - Moto E7 Plus (guam)
 
 on:
   workflow_dispatch:
@@ -8,128 +8,164 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+    # IMPORTANTE: este step va PRIMERO, antes del checkout, para que el
+    # volumen de build quede montado antes de que se cree nada en el workspace.
+    - name: Maximizar Espacio en Disco (junta / y /mnt en un solo volumen)
+      uses: easimon/maximize-build-space@master
+      with:
+        root-reserve-mb: 2048
+        temp-reserve-mb: 100
+        swap-size-mb: 1024
+        remove-dotnet: 'true'
+        remove-android: 'true'
+        remove-haskell: 'true'
+        remove-codeql: 'true'
+        remove-docker-images: 'true'
+        build-mount-path: '/home/runner/work'
+
     - name: Checkout del Repositorio
       uses: actions/checkout@v4
 
-    - name: Liberar Almacenamiento Máximo en Disco
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /share/swift
-        sudo apt-get remove --purge --auto-remove google-chrome-stable microsoft-edge-stable firefox -y
-        sudo apt-get clean
-        df -h
+    - name: Verificar Espacio Disponible
+      run: df -h
 
-    - name: Instalar Dependencias del Sistema Activas
+    - name: Instalar Dependencias del Sistema
       run: |
         sudo apt-get update
+        # libtinfo5/libncurses5 no existen en 22.04: se agrega el repo de jammy-security / se instala vía focal
         sudo apt-get install -y \
           build-essential git git-lfs bc bison flex g++-multilib gcc-multilib \
           libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools \
-          xsltproc zip zlib1g-dev lib32z1-dev libtinfo5 libncurses5 libncurses5-dev \
-          lib32ncurses-dev python3 python3-pip python-is-python3 libssl-dev \
-          curl wget liblz4-tool openjdk-11-jdk libgmp-dev libmpfr-dev libmpc-dev \
-          gperf libcap-dev python3-setuptools cpio p7zip-full
+          xsltproc zip zlib1g-dev lib32z1-dev python3 python3-pip python-is-python3 \
+          libssl-dev curl wget liblz4-tool openjdk-11-jdk libgmp-dev libmpfr-dev \
+          libmpc-dev gperf libcap-dev python3-setuptools cpio p7zip-full imagemagick
+        # libncurses5/libtinfo5 (necesarios para el toolchain viejo de AOSP)
+        wget -q http://mirrors.kernel.org/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
+        wget -q http://mirrors.kernel.org/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2ubuntu0.1_amd64.deb
+        sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb libncurses5_6.3-2ubuntu0.1_amd64.deb || sudo apt-get install -f -y
 
-    - name: Instalar Herramienta Repo (Espejo de LineageOS sin error HTML)
+    - name: Instalar Herramienta Repo (binario oficial de Google)
       run: |
         mkdir -p ~/bin
-        # Descarga directa del binario puro de Python desde el servidor de LineageOS
-        curl -L -s https://lineageos.org > ~/bin/repo
+        curl -L -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-        # Esto imprimirá el encabezado en consola para asegurar que es un script ejecutable
-        head -n 5 /usr/bin/repo
+        head -n 3 /usr/bin/repo
 
     - name: Configurar Git de Forma Global
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
+        git lfs install
 
     - name: Sincronizar Manifiesto Minimalista de TWRP 12.1
       run: |
         mkdir workspace
         cd workspace
-        repo init -u https://github.com -b twrp-12.1 --depth=1
-        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
+        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
 
-    - name: Agregar Device Tree del Moto E7 Plus
+    - name: Liberar Espacio del Historial Git Post-Sync
       run: |
         cd workspace
-        git clone https://github.com -b lineage-21 device/motorola/guam
+        echo "Espacio antes de limpiar:"
+        df -h .
+        # Los objetos .git de cada proyecto ya no se necesitan para compilar,
+        # solo el working tree. Los comprimimos al máximo en vez de borrarlos
+        # (borrar .git rompe 'repo sync' incremental, pero como es un run de
+        # una sola vez, no nos importa la incrementalidad).
+        repo forall -c 'git gc --aggressive --prune=all' 2>/dev/null || true
+        # Además, borra cachés de descarga de repo que ya no hacen falta
+        rm -rf .repo/repo/.git .repo/manifests.git/objects/pack/*.pack.old 2>/dev/null || true
+        echo "Espacio después de limpiar:"
+        df -h .
 
-    - name: Configurar Flags de Desencriptación y Características Premium
+    - name: Agregar Device Tree del Moto E7 Plus (guam)
       run: |
         cd workspace
+        # Árbol generado por twrpdtgen a partir del firmware de stock del guam.
+        # Verifica en GitHub cuál es la rama vigente antes de correr esto:
+        # https://github.com/twrpdtgen/android_device_motorola_guam/branches
+        git clone https://github.com/twrpdtgen/android_device_motorola_guam \
+          -b guam_retail-user-10-QPZS30.30-Q3-38-69-10-fdfae7-release-keys \
+          device/motorola/guam
+
+    - name: Agregar Flags TW_* Directamente al BoardConfig.mk
+      run: |
+        cd workspace/device/motorola/guam
+        cat >> BoardConfig.mk << 'EOF'
+
+        # --- Flags añadidos para esta build ---
+        TW_INCLUDE_CRYPTO := true
+        TW_INCLUDE_CRYPTO_FBE := true
+        TW_INCLUDE_FBE_METADATA_DECRYPT := true
+        TW_INCLUDE_NTFS_3G := true
+        TW_SUPPORT_ADB_SIDELOAD := true
+        TW_HAS_MTP := true
+        TW_INCLUDE_MTP := true
+        TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
+        TW_MAX_BRIGHTNESS := 255
+        TW_DEFAULT_BRIGHTNESS := 150
+        EOF
+
+    - name: Compilar Imagen de Recovery
+      run: |
+        cd workspace
+        echo "Espacio antes de compilar:"
+        df -h .
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
-        
-        # --- PARÁMETROS DE DESCIFRADO DE ALMACENAMIENTO ---
-        export TW_INCLUDE_CRYPTO=true
-        export TW_INCLUDE_CRYPTO_FBE=true
-        export TW_INCLUDE_FBE_METADATA_DECRYPT=true
-        export PLATFORM_VERSION="14"
-        export PLATFORM_SECURITY_PATCH="2026-03-01"
-        export TARGET_HW_DISK_ENCRYPTION=true
-        export TW_INCLUDE_NTFS_3G=true
-        
-        # --- CARACTERÍSTICAS EXTRA DE ORANGEFOX/TWRP AVANZADO ---
-        export TW_SUPPORT_ADB_SIDELOAD=true
-        export TW_HAS_MTP=true
-        export TW_INCLUDE_MTP=true
-        export TW_BRIGHTNESS_PATH="/sys/class/backlight/panel0-backlight/brightness"
-        export TW_MAX_BRIGHTNESS=255
-        export TW_DEFAULT_BRIGHTNESS=150
-        export TW_EXCLUDE_DEFAULT_USB_INIT=false
-        # -------------------------------------------------------------------------
-
         source build/envsetup.sh
-        lunch twrp_guam-eng || lunch omni_guam-eng
+        lunch omni_guam-eng
         mka recoveryimage -j$(nproc --all)
+        echo "Espacio después de compilar:"
+        df -h .
 
-    - name: Descargar Addons (Magisk v27.0 Oficial)
+    - name: Descargar Addon Magisk v27.0 Oficial
       run: |
         mkdir -p addons
         cd addons
-        curl -L -s -O https://github.com
-        mv Magisk-v27.0.apk Magisk-v27.0-Flasheable.zip
+        curl -L -s -o Magisk-v27.0.apk \
+          https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+        ls -la
 
-    - name: Construir Paquete ZIP de Instalación Avanzado
+    - name: Construir Paquete ZIP de Instalación
       run: |
         cd workspace/out/target/product/guam/
-        
+
         if [ -f "recovery.img" ]; then
           mkdir -p zip_structure/META-INF/com/google/android
           cp recovery.img zip_structure/
-          cp ../../../../../addons/Magisk-v27.0-Flasheable.zip zip_structure/
-          
-          # Script de terminal universal embebido para inyectar el img directamente
+          cp ../../../../../addons/Magisk-v27.0.apk zip_structure/Magisk-v27.0.zip
+
           cat << 'EOF' > zip_structure/META-INF/com/google/android/update-binary
-          #!/sbin/sh
-          echo "--------------------------------------"
-          echo "  TWRP 12.1 Advanced Installer"
-          echo "  Dispositivo: Moto E7 Plus (guam)"
-          echo "--------------------------------------"
-          echo "[+] Instalando imagen de Recovery..."
-          dd if=/recovery.img of=/dev/block/by-name/recovery
-          echo "[+] Recovery instalado correctamente."
-          echo "--------------------------------------"
-          exit 0
-          EOF
-          
+        #!/sbin/sh
+        echo "--------------------------------------"
+        echo "  TWRP 12.1 Installer - guam (Moto E7 Plus)"
+        echo "--------------------------------------"
+        echo "[+] Instalando imagen de Recovery..."
+        dd if=/recovery.img of=/dev/block/by-name/recovery
+        echo "[+] Recovery instalado correctamente."
+        echo "--------------------------------------"
+        exit 0
+        EOF
+
           chmod 755 zip_structure/META-INF/com/google/android/update-binary
           touch zip_structure/META-INF/com/google/android/updater-script
-          
+
           cd zip_structure
           zip -r ../TWRP-12.1-guam-INSTALABLE.zip .
         else
-          echo "ERROR: El archivo recovery.img no fue generado por el compilador." && exit 1
+          echo "ERROR: recovery.img no fue generado." && exit 1
         fi
 
-    - name: Subir Todo a GitHub Artifacts (ZIP + Complementos)
+    - name: Subir Artifacts a GitHub
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Pack-Advanced-guam
+        name: TWRP-Pack-guam
         path: |
           workspace/out/target/product/guam/TWRP-12.1-guam-INSTALABLE.zip
           workspace/out/target/product/guam/recovery.img
-          addons/Magisk-v27.0-Flasheable.zip
-          
+          addons/Magisk-v27.0.apk
+        if-no-files-found: warn
+        
