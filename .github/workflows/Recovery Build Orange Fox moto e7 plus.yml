@@ -1,25 +1,24 @@
-name: OrangeFox 12.1 Recovery - Moto E7 Plus (guam)
+name: TWRP 12.1 Advanced - Moto E7 Plus (guam)
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    # Docker/Runner de GitHub completamente actualizado y soportado oficialmente
     runs-on: ubuntu-22.04
 
     steps:
     - name: Checkout del Repositorio
       uses: actions/checkout@v4
 
-    - name: Liberar Espacio de Almacenamiento Masivo
+    - name: Liberar Almacenamiento Máximo en Disco
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /share/swift
         sudo apt-get remove --purge --auto-remove google-chrome-stable microsoft-edge-stable firefox -y
         sudo apt-get clean
         df -h
 
-    - name: Instalar Dependencias Modernas (Sin Paquetes Obsoletos ni Bucles)
+    - name: Instalar Dependencias del Sistema Activas (2026)
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -28,66 +27,109 @@ jobs:
           xsltproc zip zlib1g-dev lib32z1-dev libtinfo5 libncurses5 libncurses5-dev \
           lib32ncurses-dev python3 python3-pip python-is-python3 libssl-dev \
           curl wget liblz4-tool openjdk-11-jdk libgmp-dev libmpfr-dev libmpc-dev \
-          gperf libcap-dev python3-setuptools
+          gperf libcap-dev python3-setuptools cpio p7zip-full
 
-    - name: Configurar e Instalar Herramienta Repo de Google
+    - name: Instalar Repo Oficial de Google (Enlace Directo Verificado)
       run: |
         mkdir -p ~/bin
-        curl https://googleapis.com > ~/bin/repo
+        curl -s https://googleapis.com > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
+        head -n 5 /usr/bin/repo
 
-    - name: Configurar Identidad de Git
+    - name: Configurar Git de Forma Global
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
 
-    - name: Descargar Sincronizador Oficial de OrangeFox
+    - name: Sincronizar Manifiesto Minimalista de TWRP 12.1
       run: |
-        mkdir -p ~/OrangeFox_sync
-        cd ~/OrangeFox_sync
-        git clone https://gitlab.com/OrangeFox/sync.git
+        mkdir workspace
+        cd workspace
+        repo init -u https://github.com -b twrp-12.1 --depth=1
+        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
-    - name: Sincronizar Manifiesto de OrangeFox 12.1 (Ahorro de espacio)
+    - name: Agregar Device Tree del Moto E7 Plus
       run: |
-        cd ~/OrangeFox_sync/sync
-        # Ejecuta la sincronización apuntando a la arquitectura de ramas moderna 12.1
-        ./orangefox_sync.sh --branch 12.1 --path ${{ github.workspace }}/fox_12.1
-
-    - name: Clonar Árbol de Dispositivo (guam)
-      run: |
-        cd ${{ github.workspace }}/fox_12.1
-        # Se inyecta el Device Tree específico adaptado a las variables criptográficas de OrangeFox
+        cd workspace
         git clone https://github.com -b lineage-21 device/motorola/guam
 
-    - name: Configurar Variables Criptográficas y Compilar OrangeFox
+    - name: Configurar Flags de Desencriptación y Características Premium
       run: |
-        cd ${{ github.workspace }}/fox_12.1
+        cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         
-        # --- PARÁMETROS CRÍTICOS PARA DESENCRIPTACIÓN COMPLETA DE ALMACENAMIENTO ---
+        # --- PARÁMETROS DE DESCIFRADO Y ALMACENAMIENTO ---
         export TW_INCLUDE_CRYPTO=true
         export TW_INCLUDE_CRYPTO_FBE=true
         export TW_INCLUDE_FBE_METADATA_DECRYPT=true
         export PLATFORM_VERSION="14"
         export PLATFORM_SECURITY_PATCH="2026-03-01"
         export TARGET_HW_DISK_ENCRYPTION=true
-        # ---------------------------------------------------------------------------
+        export TW_INCLUDE_NTFS_3G=true
+        
+        # --- CARACTERÍSTICAS EXTRA (EDICIÓN AVANZADA) ---
+        export TW_SUPPORT_ADB_SIDELOAD=true
+        export TW_HAS_MTP=true
+        export TW_INCLUDE_MTP=true
+        export TW_BRIGHTNESS_PATH="/sys/class/backlight/panel0-backlight/brightness"
+        export TW_MAX_BRIGHTNESS=255
+        export TW_DEFAULT_BRIGHTNESS=150
+        export TW_EXCLUDE_DEFAULT_USB_INIT=false
+        # -------------------------------------------------------------------------
 
         source build/envsetup.sh
-        # Al usar OrangeFox el prefijo cambia dinámicamente a omni_ o fox_
-        lunch omni_guam-eng || lunch twrp_guam-eng
-        
-        # Forzar la compilación del binario limpio
+        lunch twrp_guam-eng || lunch omni_guam-eng
         mka recoveryimage -j$(nproc --all)
 
-    - name: Subir OrangeFox Compilado (Instalable por Fastboot y Recovery)
+    - name: Descargar Addons (Magisk v27.0 Oficial)
+      run: |
+        mkdir -p addons
+        cd addons
+        wget -q https://github.com
+        # Convertimos el APK en un ZIP flasheable por recovery de forma directa
+        mv Magisk-v27.0.apk Magisk-v27.0-Flasheable.zip
+
+    - name: Construir Paquete ZIP de Instalación Avanzado
+      run: |
+        cd workspace/out/target/product/guam/
+        
+        # Si el compilador generó el recovery.img base, empaquetamos la estructura instalable
+        if [ -f "recovery.img" ]; then
+          mkdir -p zip_structure/META-INF/com/google/android
+          cp recovery.img zip_structure/
+          cp ../../../../../addons/Magisk-v27.0-Flasheable.zip zip_structure/
+          
+          # Creamos el script de flasheo básico universal que inyectará el recovery en la partición
+          cat << 'EOF' > zip_structure/META-INF/com/google/android/update-binary
+          #!/sbin/sh
+          ui_print "--------------------------------------"
+          ui_print "  TWRP 12.1 Advanced Installer"
+          ui_print "  Dispositivo: Moto E7 Plus (guam)"
+          ui_print "--------------------------------------"
+          ui_print "[+] Instalando imagen de Recovery..."
+          package_extract_file "recovery.img" "/dev/block/by-name/recovery"
+          ui_print "[+] Recovery instalado correctamente."
+          ui_print "--------------------------------------"
+          EOF
+          
+          chmod 755 zip_structure/META-INF/com/google/android/update-binary
+          touch zip_structure/META-INF/com/google/android/updater-script
+          
+          # Comprimir todo el paquete final
+          cd zip_structure
+          zip -r ../TWRP-12.1-guam-INSTALABLE.zip .
+        else
+          echo "ERROR: El archivo recovery.img no fue generado por el compilador." && exit 1
+        fi
+
+    - name: Subir Todo a GitHub Artifacts (ZIP + Complementos)
       uses: actions/upload-artifact@v4
       with:
-        name: OrangeFox-Android14-Desencriptado-guam
+        name: TWRP-Pack-Advanced-guam
         path: |
-          ${{ github.workspace }}/fox_12.1/out/target/product/guam/OrangeFox*.img
-          ${{ github.workspace }}/fox_12.1/out/target/product/guam/OrangeFox*.zip
-          ${{ github.workspace }}/fox_12.1/out/target/product/guam/recovery.img
+          workspace/out/target/product/guam/TWRP-12.1-guam-INSTALABLE.zip
+          workspace/out/target/product/guam/recovery.img
+          addons/Magisk-v27.0-Flasheable.zip
           
