@@ -86,6 +86,27 @@ jobs:
           -b guam_retail-user-10-QPZS30.30-Q3-38-69-10-fdfae7-release-keys \
           device/motorola/guam
 
+    - name: Corregir device.mk (PRODUCT_STATIC_BOOT_CONTROL_HAL obsoleto)
+      run: |
+        cd workspace/device/motorola/guam
+        echo "--- device.mk ANTES ---"
+        grep -n "PRODUCT_STATIC_BOOT_CONTROL_HAL" -A 5 device.mk || echo "(no se encontró la línea, sigue igual)"
+
+        # El árbol de guam viene generado de un firmware viejo (Android 10) y
+        # usa PRODUCT_STATIC_BOOT_CONTROL_HAL, que el build system del
+        # manifiesto twrp-12.1 (basado en fuentes más nuevas) ya no soporta.
+        # El guam no usa particiones A/B, así que este HAL no hace falta para
+        # compilar solo el recovery: se elimina el bloque completo (incluyendo
+        # líneas de continuación con "\").
+        awk '
+          /^PRODUCT_STATIC_BOOT_CONTROL_HAL/ { skip=1 }
+          skip { if ($0 !~ /\\$/) { skip=0 }; next }
+          { print }
+        ' device.mk > device.mk.tmp && mv device.mk.tmp device.mk
+
+        echo "--- device.mk DESPUÉS ---"
+        grep -n "PRODUCT_STATIC_BOOT_CONTROL_HAL" device.mk || echo "(línea eliminada correctamente)"
+
     - name: Agregar Flags TW_* Directamente al BoardConfig.mk
       run: |
         cd workspace/device/motorola/guam
