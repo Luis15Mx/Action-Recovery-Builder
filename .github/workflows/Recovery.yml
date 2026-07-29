@@ -1,0 +1,181 @@
+name: TWRP 12.1 - Moto E7 Plus (guam)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout del Repositorio
+      uses: actions/checkout@v4
+
+    - name: Liberar Espacio en Disco (limpieza directa, sin LVM)
+      run: |
+        echo "Espacio ANTES de limpiar:"
+        df -h /
+
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/share/boost
+        sudo rm -rf /opt/hostedtoolcache
+        sudo rm -rf /usr/local/.ghcup
+        sudo rm -rf /usr/share/swift
+        sudo rm -rf /opt/az
+        sudo rm -rf /usr/local/share/powershell
+        sudo rm -rf /usr/share/miniconda
+        sudo rm -rf /usr/local/julia*
+        sudo rm -rf /usr/local/lib/node_modules
+        sudo rm -rf /opt/microsoft
+        sudo rm -rf /opt/google/chrome
+        sudo rm -rf /opt/firefox
+        sudo docker system prune -af 2>/dev/null || true
+        sudo apt-get clean
+
+        echo "Espacio DESPUÉS de limpiar:"
+        df -h /
+
+    - name: Instalar Dependencias del Sistema
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential git git-lfs bc bison flex g++-multilib gcc-multilib \
+          libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools \
+          xsltproc zip zlib1g-dev lib32z1-dev python3 python3-pip python-is-python3 \
+          libssl-dev curl wget liblz4-tool openjdk-11-jdk libgmp-dev libmpfr-dev \
+          libmpc-dev gperf libcap-dev python3-setuptools cpio p7zip-full imagemagick
+
+    - name: Instalar libtinfo5/libncurses5 (removidos de 22.04, se toman de Ubuntu Focal)
+      run: |
+        echo "deb http://archive.ubuntu.com/ubuntu focal main universe" | sudo tee /etc/apt/sources.list.d/focal.list
+        sudo apt-get update
+        sudo apt-get install -y libncurses5 libtinfo5
+        sudo rm /etc/apt/sources.list.d/focal.list
+        sudo apt-get update
+
+    - name: Instalar Herramienta Repo (binario oficial de Google)
+      run: |
+        mkdir -p ~/bin
+        curl -L -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
+        head -n 3 /usr/bin/repo
+
+    - name: Configurar Git de Forma Global
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git lfs install
+
+    - name: Sincronizar Manifiesto Minimalista de TWRP 12.1
+      run: |
+        mkdir workspace
+        cd workspace
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
+        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
+
+    - name: Liberar Espacio del Historial Git Post-Sync
+      run: |
+        cd workspace
+        echo "Espacio antes de limpiar:"
+        df -h .
+        # Los objetos .git de cada proyecto ya no se necesitan para compilar,
+        # solo el working tree. Los comprimimos al máximo en vez de borrarlos
+        # (borrar .git rompe 'repo sync' incremental, pero como es un run de
+        # una sola vez, no nos importa la incrementalidad).
+        repo forall -c 'git gc --aggressive --prune=all' 2>/dev/null || true
+        # Además, borra cachés de descarga de repo que ya no hacen falta
+        rm -rf .repo/repo/.git .repo/manifests.git/objects/pack/*.pack.old 2>/dev/null || true
+        echo "Espacio después de limpiar:"
+        df -h .
+
+    - name: Agregar Device Tree del Moto E7 Plus (guam)
+      run: |
+        cd workspace
+        # Árbol generado por twrpdtgen a partir del firmware de stock del guam.
+        # Verifica en GitHub cuál es la rama vigente antes de correr esto:
+        # https://github.com/twrpdtgen/android_device_motorola_guam/branches
+        git clone https://github.com/twrpdtgen/android_device_motorola_guam \
+          -b guam_retail-user-10-QPZS30.30-Q3-38-69-10-fdfae7-release-keys \
+          device/motorola/guam
+
+    - name: Agregar Flags TW_* Directamente al BoardConfig.mk
+      run: |
+        cd workspace/device/motorola/guam
+        cat >> BoardConfig.mk << 'EOF'
+
+        # --- Flags añadidos para esta build ---
+        TW_INCLUDE_CRYPTO := true
+        TW_INCLUDE_CRYPTO_FBE := true
+        TW_INCLUDE_FBE_METADATA_DECRYPT := true
+        TW_INCLUDE_NTFS_3G := true
+        TW_SUPPORT_ADB_SIDELOAD := true
+        TW_HAS_MTP := true
+        TW_INCLUDE_MTP := true
+        TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
+        TW_MAX_BRIGHTNESS := 255
+        TW_DEFAULT_BRIGHTNESS := 150
+        EOF
+
+    - name: Compilar Imagen de Recovery
+      run: |
+        cd workspace
+        echo "Espacio antes de compilar:"
+        df -h .
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        source build/envsetup.sh
+        lunch omni_guam-eng
+        mka recoveryimage -j$(nproc --all)
+        echo "Espacio después de compilar:"
+        df -h .
+
+    - name: Descargar Addon Magisk v27.0 Oficial
+      run: |
+        mkdir -p addons
+        cd addons
+        curl -L -s -o Magisk-v27.0.apk \
+          https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+        ls -la
+
+    - name: Construir Paquete ZIP de Instalación
+      run: |
+        cd workspace/out/target/product/guam/
+
+        if [ -f "recovery.img" ]; then
+          mkdir -p zip_structure/META-INF/com/google/android
+          cp recovery.img zip_structure/
+          cp ../../../../../addons/Magisk-v27.0.apk zip_structure/Magisk-v27.0.zip
+
+          cat << 'EOF' > zip_structure/META-INF/com/google/android/update-binary
+        #!/sbin/sh
+        echo "--------------------------------------"
+        echo "  TWRP 12.1 Installer - guam (Moto E7 Plus)"
+        echo "--------------------------------------"
+        echo "[+] Instalando imagen de Recovery..."
+        dd if=/recovery.img of=/dev/block/by-name/recovery
+        echo "[+] Recovery instalado correctamente."
+        echo "--------------------------------------"
+        exit 0
+        EOF
+
+          chmod 755 zip_structure/META-INF/com/google/android/update-binary
+          touch zip_structure/META-INF/com/google/android/updater-script
+
+          cd zip_structure
+          zip -r ../TWRP-12.1-guam-INSTALABLE.zip .
+        else
+          echo "ERROR: recovery.img no fue generado." && exit 1
+        fi
+
+    - name: Subir Artifacts a GitHub
+      uses: actions/upload-artifact@v4
+      with:
+        name: TWRP-Pack-guam
+        path: |
+          workspace/out/target/product/guam/TWRP-12.1-guam-INSTALABLE.zip
+          workspace/out/target/product/guam/recovery.img
+          addons/Magisk-v27.0.apk
+        if-no-files-found: warn
